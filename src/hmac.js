@@ -1,6 +1,7 @@
 "use strict";
 const crypto = require("crypto");
 
+
 /**
  * HMAC helpers for Agent Games.
  *
@@ -8,7 +9,6 @@ const crypto = require("crypto");
  * - Each agent gets a 32-byte secret at registration, shown once.
  * - Incoming requests carry header `x-agent-games-signature`.
  * - Every response must be signed with the same header over the raw body.
- *
  * SPEC-PENDING uncertainties (kept tolerant on verify, explicit on sign):
  * - Secret presentation format at registration (hex vs base64) — parseSecret
  *   accepts hex (with/without 0x), base64, or raw utf8.
@@ -20,17 +20,25 @@ const crypto = require("crypto");
 function parseSecret(value) {
   if (!value) return null;
   const v = String(value).trim();
-  if (/^(0x)?[0-9a-fA-F]{64}$/.test(v)) return Buffer.from(v.replace(/^0x/, ""), "hex");
-  // base64 for exactly 32 bytes
-  if (/^[A-Za-z0-9+/=]{43,44}$/.test(v)) {
-    const b = Buffer.from(v, "base64");
-    if (b.length === 32) return b;
-  }
+  // VERIFIED 2026-11-15 against a live platform preflight (AGDBG capture):
+  // the platform HMACs with the secret TEXT itself (UTF-8) as the key —
+  // the 64-char hex string is NOT hex-decoded. The platform's request
+  // signature matched HMAC(key = utf8 string) exactly, and its rejection
+  // of our responses was because we signed with the hex-decoded bytes.
   return Buffer.from(v, "utf8");
 }
 
 function signBody(secret, rawBody) {
   return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+}
+
+function candidateKeys(secret) {
+  // Verification stays tolerant: the canonical UTF-8 string key first,
+  // then the hex-decoded-bytes interpretation as a fallback.
+  const keys = [secret];
+  const asText = secret.toString("utf8");
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(asText)) keys.push(Buffer.from(asText.replace(/^0x/, ""), "hex"));
+  return keys;
 }
 
 function safeEqual(a, b) {
@@ -44,10 +52,12 @@ function verifySignature(secret, rawBody, headerValue) {
   if (!secret || !headerValue) return false;
   let v = String(headerValue).trim();
   if (v.toLowerCase().startsWith("sha256=")) v = v.slice(7).trim();
-  const hex = signBody(secret, rawBody);
-  if (safeEqual(v.toLowerCase(), hex)) return true;
-  const b64 = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
-  if (safeEqual(v, b64)) return true;
+  for (const key of candidateKeys(secret)) {
+    const hex = crypto.createHmac("sha256", key).update(rawBody).digest("hex");
+    if (safeEqual(v.toLowerCase(), hex)) return true;
+    const b64 = crypto.createHmac("sha256", key).update(rawBody).digest("base64");
+    if (safeEqual(v, b64)) return true;
+  }
   return false;
 }
 
