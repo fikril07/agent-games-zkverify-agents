@@ -1,0 +1,1 @@
+{"$schema":"https://openapi.vercel.sh/vercel.json","functions":{"api/gatekeeper/agent.js":{"maxDuration":60},"api/steal/agent.js":{"maxDuration":30}},"regions":["sin1"],"rewrites":[{"destination":"/api/steal/agent","source":"/steal/agent"},{"destination":"/api/gatekeeper/agent","source":"/gatekeeper/agent"}]}
