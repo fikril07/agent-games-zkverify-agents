@@ -2,7 +2,7 @@
 const { processRequest } = require("../src/core");
 
 /** Shared Vercel adapter: reads the RAW body (bodyParser disabled) so the
- * platform HMAC over the exact bytes can be verified. */
+ *  platform HMAC over the exact bytes can be verified. */
 function makeHandler(kind) {
   const handler = async (req, res) => {
     if (req.method !== "POST") { res.status(405).json({ error: "method not allowed" }); return; }
