@@ -2,7 +2,7 @@
 const { parseSecret, signBody, verifySignature } = require("./hmac");
 const { IdempotencyStore } = require("./idempotency");
 const { decide } = require("./steal");
-const { handleDuel } = require("./duel");
+const { handleDuel, holdResponse } = require("./duel");
 const { judge, judgeDecision } = require("./gatekeeper");
 
 /**
@@ -75,10 +75,19 @@ async function processRequest(kind, rawBody, signatureHeader, env = process.env)
       : json.game_id != null && json.turn != null
         ? `steal:${json.game_id}:${json.turn}`
         : null;
-    const produce = async () => ({
-      body: Buffer.from(JSON.stringify(isDuel ? handleDuel(json) : decide(json))),
-      contentType: "application/json",
-    });
+    const produce = async () => {
+      try {
+        return {
+          body: Buffer.from(JSON.stringify(isDuel ? handleDuel(json) : decide(json))),
+          contentType: "application/json",
+        };
+      } catch {
+        // Never answer a delivery with a 500: fall back to the safest
+        // legal action for the envelope shape (HOLD duel / WAIT grid).
+        const fallback = isDuel ? holdResponse(json) : { action: "WAIT" };
+        return { body: Buffer.from(JSON.stringify(fallback)), contentType: "application/json" };
+      }
+    };
     const out = key ? await stores.steal.run(key, produce) : await produce();
     const body = out.body.toString();
     return { status: 200, body, signature: signBody(secret, out.body) };
