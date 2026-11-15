@@ -1,7 +1,6 @@
 "use strict";
 const crypto = require("crypto");
 
-
 /**
  * HMAC helpers for Agent Games.
  *
@@ -9,6 +8,7 @@ const crypto = require("crypto");
  * - Each agent gets a 32-byte secret at registration, shown once.
  * - Incoming requests carry header `x-agent-games-signature`.
  * - Every response must be signed with the same header over the raw body.
+ *
  * SPEC-PENDING uncertainties (kept tolerant on verify, explicit on sign):
  * - Secret presentation format at registration (hex vs base64) — parseSecret
  *   accepts hex (with/without 0x), base64, or raw utf8.
