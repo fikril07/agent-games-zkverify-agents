@@ -11,9 +11,11 @@ function makeHandler(kind) {
     const rawBody = Buffer.concat(chunks);
     try {
       const out = await processRequest(kind, rawBody, req.headers["x-agent-games-signature"], process.env);
+      console.log("AGDBG kind=" + kind + " req=" + rawBody.toString("utf8").slice(0, 4000) + " res=" + String(out.body).slice(0, 4000));
       if (out.signature) res.setHeader("x-agent-games-signature", out.signature);
       res.status(out.status).setHeader("content-type", "application/json").send(out.body);
-    } catch {
+    } catch (e) {
+      console.error("AGDBG kind=" + kind + " error=" + (e && e.message));
       res.status(500).json({ error: "internal error" });
     }
   };
