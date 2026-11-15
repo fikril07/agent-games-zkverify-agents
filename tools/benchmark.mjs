@@ -1,0 +1,13 @@
+import * as snarkjs from 'snarkjs';
+const time = async (label, fn) => { const t0 = Date.now(); const r = await fn(); console.log(`${label}: ${Date.now() - t0} ms`); return r; };
+const vfyInputs = { strategyParams: [10,0,0,0,0,0,0,0], salt: 987654321, commitment: '0', matchId: 1, turnNumber: 1, selfBalance: 100, opponentBalance: 100, circuitVersion: 1, action: 2, amount: 10 };
+import { buildPoseidon } from 'circomlibjs';
+const poseidon = await buildPoseidon();
+vfyInputs.commitment = poseidon.F.toObject(poseidon([...vfyInputs.strategyParams.map(BigInt), BigInt(vfyInputs.salt)])).toString();
+const vfy = await time('vfyPolicy fullProve (17 inputs, 1909 witness)', () => snarkjs.groth16.fullProve(vfyInputs, '../artifacts/vfy-policy.wasm', '../artifacts/vfy-policy_final.zkey'));
+const gkInputs = { taskId: '424242', registeredVkHash: '111', proofVkHash: '111', minimum: '1000', publicBalance: '1460', expiryBlock: '8430000', currentBlock: '8420000', recipient: '56906', conditionRecipient: '56906', amount: '500', maxTransfer: '1000', decision: 1, salt: '7' };
+const gk = await time('gatekeeper fullProve (13 inputs, 647 witness)', () => snarkjs.groth16.fullProve(gkInputs, '../artifacts/gatekeeper.wasm', '../artifacts/gatekeeper_final.zkey'));
+import fs from 'fs';
+const gkVk = JSON.parse(fs.readFileSync('../spec/gatekeeper-vk.json', 'utf8'));
+await time('gatekeeper groth16.verify', () => snarkjs.groth16.verify(gkVk, gk.publicSignals, gk.proof));
+console.log('vfy publicSignals:', vfy.publicSignals.join(','));
