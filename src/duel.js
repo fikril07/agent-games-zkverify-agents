@@ -1,5 +1,6 @@
 "use strict";
 const { keccak256 } = require("js-sha3");
+const { prove } = require("./prover");
 
 /**
  * Steal the VFY — BALANCE-DUEL protocol, as specified on /build (the starter
@@ -19,9 +20,15 @@ const { keccak256 } = require("js-sha3");
  * Match: 20 turns, start balance 100 VFY, highest balance wins.
  *
  * Response: { matchId, turn, action:{type, amount?}, policyProof:
- *   { circuitVersion:"v1", publicInputsHash }, agentTimestamp, idempotencyKey }
+ *   { circuitVersion:"v1", proof, public_signals, publicInputsHash },
+ *   agentTimestamp, idempotencyKey }
  * action.amount is present ONLY for EXTRACT (schema rejects it otherwise).
- * publicInputsHash = keccak256 of the 8 ABI-packed 32-byte big-endian fields,
+ * Per /build ("What you return" + "Common mistakes" #1), policyProof MUST
+ * carry the Groth16 proof and public_signals INSIDE it — a hash-only
+ * policyProof fails the practice schema validation ("Agent response did
+ * not match the VFY protocol schema", live 2026-11-16) and scores the turn
+ * as HOLD with no proof in real rounds. publicInputsHash is an optional
+ * audit pointer: keccak256 of the 8 ABI-packed 32-byte big-endian fields,
  * in order: [commitment, matchId (UUID as hex), turn, selfBalance,
  * opponentBalance, actionCode (HOLD 0 / FORTIFY 1 / EXTRACT 2), amount
  * (0 for HOLD/FORTIFY), circuitVersion (1)] — verbatim from /build.
@@ -44,6 +51,11 @@ function be32(n) {
 // TypeError -> HTTP 500 (live practice failure, 2026-11-16).
 const OWN_COMMITMENT =
   "16214830582135074479649400365420921172603306988248244802062782181847191316900";
+
+// The committed strategy, frozen at registration (see
+// tools/policy-commitment.js): commitment = Poseidon(strategyParams, salt).
+const STRATEGY_PARAMS = [10, 0, 0, 0, 0, 0, 0, 0];
+const SALT = 987654321;
 
 function toBig(value, fallback) {
   try {
@@ -79,6 +91,30 @@ function publicInputsHash({ commitment, matchId, turn, selfBalance, opponentBala
     be32(1),
   ]);
   return "0x" + keccak256(packed);
+}
+
+/**
+ * Generate the per-turn Groth16 proof for the vfy-policy circuit. The
+ * circuit inputs are the committed strategy (params + salt + commitment)
+ * plus this turn's public state, in the exact encoding the offline
+ * commitment was generated with (tools/policy-commitment.js). The circuit
+ * itself enforces that the action is the committed strategy's action for
+ * this state, so a proof can only exist for a strategy-consistent turn.
+ */
+async function proveTurn({ matchId, turn, selfBalance, opponentBalance, action, amount }) {
+  const inputs = {
+    commitment: OWN_COMMITMENT,
+    circuitVersion: 1,
+    matchId: matchIdBig(matchId).toString(),
+    turnNumber: Number(toBig(turn, 0n)),
+    selfBalance: Number(toBig(selfBalance, 0n)),
+    opponentBalance: Number(toBig(opponentBalance, 0n)),
+    action: ACTION_CODE[action] ?? 0,
+    amount: Number(toBig(amount || 0, 0n)),
+    salt: SALT,
+    strategyParams: STRATEGY_PARAMS,
+  };
+  return prove("vfyPolicy", inputs);
 }
 
 /**
@@ -124,7 +160,7 @@ function holdResponse(envelope) {
   };
 }
 
-function handleDuel(envelope) {
+async function handleDuel(envelope) {
   try {
     const state = envelope.state || {};
     const action = decideDuel(state, envelope.turn);
@@ -137,13 +173,35 @@ function handleDuel(envelope) {
       action: action.type,
       amount: action.amount || 0,
     });
+    // The schema-required part: a real per-turn proof + public signals
+    // inside policyProof. If proving ever fails, degrade to the hash-only
+    // pointer rather than a 500 — the delivery still lands.
+    let policyProof = { circuitVersion: "v1", publicInputsHash: hash };
+    try {
+      const { proof, publicSignals } = await proveTurn({
+        matchId: envelope.matchId,
+        turn: envelope.turn,
+        selfBalance: state.selfBalance,
+        opponentBalance: state.opponentBalance,
+        action: action.type,
+        amount: action.amount || 0,
+      });
+      policyProof = {
+        circuitVersion: "v1",
+        proof,
+        public_signals: publicSignals,
+        publicInputsHash: hash,
+      };
+    } catch {
+      /* keep the hash-only policyProof */
+    }
     const actionObj = { type: action.type };
     if (action.type === "EXTRACT") actionObj.amount = action.amount;
     return {
       matchId: envelope.matchId,
       turn: envelope.turn,
       action: actionObj,
-      policyProof: { circuitVersion: "v1", publicInputsHash: hash },
+      policyProof,
       agentTimestamp: new Date().toISOString(),
       idempotencyKey: `${envelope.matchId}:${envelope.turn}`,
     };
@@ -154,4 +212,4 @@ function handleDuel(envelope) {
   }
 }
 
-module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE, holdResponse };
+module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE, holdResponse, proveTurn };
