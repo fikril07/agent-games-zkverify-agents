@@ -78,7 +78,7 @@ async function processRequest(kind, rawBody, signatureHeader, env = process.env)
     const produce = async () => {
       try {
         return {
-          body: Buffer.from(JSON.stringify(isDuel ? handleDuel(json) : decide(json))),
+          body: Buffer.from(JSON.stringify(isDuel ? await handleDuel(json) : decide(json))),
           contentType: "application/json",
         };
       } catch {
