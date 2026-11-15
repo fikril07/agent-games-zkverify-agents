@@ -34,6 +34,19 @@ const { prove } = require("./prover");
  * (0 for HOLD/FORTIFY), circuitVersion (1)] — verbatim from /build.
  */
 
+const { createHash } = require("crypto");
+
+/** The response schema validates idempotencyKey as a UUID (the /build
+ *  example shows a UUID-shaped key). A raw "matchId:turn" string is
+ *  rejected as a mis-typed field, so derive a deterministic UUID from
+ *  the turn identity instead: same turn -> same key (true idempotency),
+ *  unique per turn. */
+function turnKey(matchId, turn) {
+  const h = createHash("sha256").update(`${matchId}:${turn}`).digest("hex");
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 const ACTION_CODE = { HOLD: 0, FORTIFY: 1, EXTRACT: 2 };
 const EXTRACT_MAX = 10;
 const FORTIFY_BLOCK = 6;
@@ -156,7 +169,7 @@ function holdResponse(envelope) {
     action: { type: "HOLD" },
     policyProof: { circuitVersion: "v1", publicInputsHash: hash },
     agentTimestamp: new Date().toISOString(),
-    idempotencyKey: `${envelope && envelope.matchId}:${envelope && envelope.turn}`,
+    idempotencyKey: turnKey(envelope && envelope.matchId, envelope && envelope.turn),
   };
 }
 
@@ -203,7 +216,7 @@ async function handleDuel(envelope) {
       action: actionObj,
       policyProof,
       agentTimestamp: new Date().toISOString(),
-      idempotencyKey: `${envelope.matchId}:${envelope.turn}`,
+      idempotencyKey: turnKey(envelope.matchId, envelope.turn),
     };
   } catch {
     // A malformed envelope must still get a signed 200, never a 500:
