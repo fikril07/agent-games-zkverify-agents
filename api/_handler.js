@@ -1,7 +1,6 @@
 "use strict";
 const { processRequest } = require("../src/core");
 
-
 /** Shared Vercel adapter: reads the RAW body (bodyParser disabled) so the
  *  platform HMAC over the exact bytes can be verified. */
 function makeHandler(kind) {
