@@ -39,9 +39,10 @@ function isPreflight(json) {
 }
 
 function preflightResponse(json) {
-  // /build's preflight expects { ok:true, protocolVersion:"v1" }; the
-  // event-page variant expects exactly { ok:true }.
-  return json.type === "agent-games.preflight.v1" ? { ok: true, protocolVersion: "v1" } : { ok: true };
+  // Live dashboard save-check (2026-11-15) rejects any preflight response
+  // that is not "signed protocol-v1 JSON", for every preflight shape it
+  // sends — so protocolVersion is always included.
+  return { ok: true, protocolVersion: "v1" };
 }
 
 async function processRequest(kind, rawBody, signatureHeader, env = process.env) {
