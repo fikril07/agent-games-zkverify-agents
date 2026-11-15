@@ -38,15 +38,44 @@ function be32(n) {
   return buf;
 }
 
+// Our own circuit commitment (public signal #2 of the registered policy
+// proof), used when an envelope arrives without a usable strategyCommitment
+// — e.g. practice deliveries, which omit it and previously threw a BigInt
+// TypeError -> HTTP 500 (live practice failure, 2026-11-16).
+const OWN_COMMITMENT =
+  "16214830582135074479649400365420921172603306988248244802062782181847191316900";
+
+function toBig(value, fallback) {
+  try {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number") return BigInt(Math.trunc(value));
+    const s = String(value).trim();
+    if (!s) return fallback;
+    return BigInt(s);
+  } catch {
+    return fallback;
+  }
+}
+
+function matchIdBig(matchId) {
+  // Well-formed UUIDs pack exactly as before (dashes stripped, 32 hex).
+  // Anything else is sanitized deterministically instead of throwing.
+  const hex = String(matchId || "").replace(/[^0-9a-fA-F]/g, "");
+  if (!hex) return 0n;
+  const trimmed = hex.length > 32 ? hex.slice(-32) : hex.padStart(32, "0");
+  return BigInt("0x" + trimmed);
+}
+
 function publicInputsHash({ commitment, matchId, turn, selfBalance, opponentBalance, action, amount }) {
   const packed = Buffer.concat([
-    be32(BigInt(commitment)),
-    be32(BigInt("0x" + String(matchId).replace(/-/g, ""))),
-    be32(turn),
-    be32(selfBalance),
-    be32(opponentBalance),
-    be32(ACTION_CODE[action]),
-    be32(amount || 0),
+    be32(toBig(commitment, BigInt(OWN_COMMITMENT))),
+    be32(matchIdBig(matchId)),
+    be32(toBig(turn, 0n)),
+    be32(toBig(selfBalance, 0n)),
+    be32(toBig(opponentBalance, 0n)),
+    be32(ACTION_CODE[action] ?? 0),
+    be32(toBig(amount || 0, 0n)),
     be32(1),
   ]);
   return "0x" + keccak256(packed);
@@ -73,28 +102,56 @@ function decideDuel(state, turn) {
   return { type: "HOLD" };
 }
 
-function handleDuel(envelope) {
-  const state = envelope.state || {};
-  const action = decideDuel(state, envelope.turn);
+function holdResponse(envelope) {
+  const state = (envelope && envelope.state) || {};
   const hash = publicInputsHash({
-    commitment: envelope.strategyCommitment && envelope.strategyCommitment.hash,
-    matchId: envelope.matchId,
-    turn: envelope.turn,
+    commitment:
+      envelope && envelope.strategyCommitment && envelope.strategyCommitment.hash,
+    matchId: envelope && envelope.matchId,
+    turn: envelope && envelope.turn,
     selfBalance: state.selfBalance,
     opponentBalance: state.opponentBalance,
-    action: action.type,
-    amount: action.amount || 0,
+    action: "HOLD",
+    amount: 0,
   });
-  const actionObj = { type: action.type };
-  if (action.type === "EXTRACT") actionObj.amount = action.amount;
   return {
-    matchId: envelope.matchId,
-    turn: envelope.turn,
-    action: actionObj,
+    matchId: envelope && envelope.matchId,
+    turn: envelope && envelope.turn,
+    action: { type: "HOLD" },
     policyProof: { circuitVersion: "v1", publicInputsHash: hash },
     agentTimestamp: new Date().toISOString(),
-    idempotencyKey: `${envelope.matchId}:${envelope.turn}`,
+    idempotencyKey: `${envelope && envelope.matchId}:${envelope && envelope.turn}`,
   };
 }
 
-module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE };
+function handleDuel(envelope) {
+  try {
+    const state = envelope.state || {};
+    const action = decideDuel(state, envelope.turn);
+    const hash = publicInputsHash({
+      commitment: envelope.strategyCommitment && envelope.strategyCommitment.hash,
+      matchId: envelope.matchId,
+      turn: envelope.turn,
+      selfBalance: state.selfBalance,
+      opponentBalance: state.opponentBalance,
+      action: action.type,
+      amount: action.amount || 0,
+    });
+    const actionObj = { type: action.type };
+    if (action.type === "EXTRACT") actionObj.amount = action.amount;
+    return {
+      matchId: envelope.matchId,
+      turn: envelope.turn,
+      action: actionObj,
+      policyProof: { circuitVersion: "v1", publicInputsHash: hash },
+      agentTimestamp: new Date().toISOString(),
+      idempotencyKey: `${envelope.matchId}:${envelope.turn}`,
+    };
+  } catch {
+    // A malformed envelope must still get a signed 200, never a 500:
+    // a HOLD turn scores as a miss at worst, a 500 forfeits the delivery.
+    return holdResponse(envelope || {});
+  }
+}
+
+module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE, holdResponse };
