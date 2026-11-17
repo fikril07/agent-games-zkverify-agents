@@ -32,6 +32,20 @@ const { prove } = require("./prover");
  * in order: [commitment, matchId (UUID as hex), turn, selfBalance,
  * opponentBalance, actionCode (HOLD 0 / FORTIFY 1 / EXTRACT 2), amount
  * (0 for HOLD/FORTIFY), circuitVersion (1)] — verbatim from /build.
+ *
+ * ROUND-04 BUG (diagnosed 2026-11-17, tools/diag-live-proof.js): the hash
+ * MUST be packed from the SAME public inputs the proof attests — above
+ * all the commitment field must be the circuit commitment the proof
+ * binds (OWN_COMMITMENT, public_signals[1]). Packing the envelope's
+ * strategyCommitment.hash instead made the response hash diverge from
+ * the proof at exactly public_signals[1] in every LIVE turn (practice
+ * envelopes carry no strategyCommitment, so the fallback kept practice
+ * consistent — practice passed, all 20 live turns were rejected with
+ * "public_signal[1] does not match the task"). The envelope value is the
+ * dashboard-registered reference (currently 0x4ebbcd65...ded6, the SHA256
+ * publicInputsHash of the genesis proof) — a different number from the
+ * Poseidon circuit commitment (0x23d944d5...e9a4); it must never be
+ * packed into the per-turn hash.
  */
 
 const { createHash } = require("crypto");
@@ -154,8 +168,9 @@ function decideDuel(state, turn) {
 function holdResponse(envelope) {
   const state = (envelope && envelope.state) || {};
   const hash = publicInputsHash({
-    commitment:
-      envelope && envelope.strategyCommitment && envelope.strategyCommitment.hash,
+    // Always the circuit commitment the proof binds — never the
+    // envelope's strategyCommitment.hash (see header: Round-04 bug).
+    commitment: OWN_COMMITMENT,
     matchId: envelope && envelope.matchId,
     turn: envelope && envelope.turn,
     selfBalance: state.selfBalance,
@@ -178,7 +193,9 @@ async function handleDuel(envelope) {
     const state = envelope.state || {};
     const action = decideDuel(state, envelope.turn);
     const hash = publicInputsHash({
-      commitment: envelope.strategyCommitment && envelope.strategyCommitment.hash,
+      // Always the circuit commitment the proof binds — never the
+      // envelope's strategyCommitment.hash (see header: Round-04 bug).
+      commitment: OWN_COMMITMENT,
       matchId: envelope.matchId,
       turn: envelope.turn,
       selfBalance: state.selfBalance,
@@ -225,4 +242,4 @@ async function handleDuel(envelope) {
   }
 }
 
-module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE, holdResponse, proveTurn };
+module.exports = { handleDuel, decideDuel, publicInputsHash, ACTION_CODE, holdResponse, proveTurn, OWN_COMMITMENT };
